@@ -2,47 +2,52 @@ module Parser where
 
 import Core
 import Text.Parsec
-import Text.Parsec.Char (anyChar)
 import Text.Parsec.Char
-import Text.Parsec.String (Parser)
 import Text.Parsec.Combinator (many1)
 
-parse' :: Parser a -> String -> Either ParseError a
-parse' p s = parse p "" s
+type Parser u a = Parsec String u a
 
-spc :: Parser ()
-spc = skipMany $ oneOf [' ', '\t', '\n']
+combine :: Parser u a -> Parser u b -> Parser u (Either a b)
+combine p q = (Left <$> p) <|> (Right <$> q)
 
-spc1 :: Parser ()
-spc1 = skipMany1 $ oneOf [' ', '\t', '\n']
+parse' :: Parser u a -> u -> String -> Either ParseError a
+parse' p u s = runParser p u "" s
 
-sep :: Parser ()
-sep = do
-  spc
-  char ':'
-  spc
+parseWith :: Parser u a -> u -> String -> Either ParseError (a, String)
+parseWith p u s = parse' p' u s
+  where p' = do
+          a <- p
+          str <- getInput
+          return (a, str)
 
-name :: Parser String
-name = many1 alphaNum
+tok :: Parser u a -> Parser u a
+tok p = do
+  a <- p
+  spaces
+  return a
 
-bind :: Parser (String, Term)
+reserved :: String -> Parser u String
+reserved s = tok $ string s
+
+name :: Parser u String
+name = tok $ many1 alphaNum
+
+bind :: Parser u (String, Term)
 bind = do
   nam <- name
-  sep
+  reserved ":"
   trm <- term
   return (nam, trm)
 
-trycomma :: Parser Bool
+trycomma :: Parser u Bool
 trycomma = do
-  c <- char ','
-  return $ c == ','
+  c <- reserved ","
+  return $ c == ","
 
-binds :: Parser [(String, Term)]
+binds :: Parser u [(String, Term)]
 binds = do
   bnd <- bind
-  spc
   comma <- option False trycomma
-  spc
   if comma
     then do
     bnds <- binds
@@ -50,12 +55,10 @@ binds = do
     else
     return [bnd]
 
-vars :: Parser [String]
+vars :: Parser u [String]
 vars = do
   var <- name
-  spc
   comma <- option False trycomma
-  spc
   if comma
     then do
     rest <- vars
@@ -63,18 +66,19 @@ vars = do
     else
     return [var]
 
-
-def :: Parser (String, Term, Term)
+def :: Parser u (String, Term, Term)
 def = do
   nam <- name
-  sep
+  reserved ":"
   typ <- term
-  spc1
   trm <- term
   return (nam, typ, trm)
 
--- TODO
-term :: Parser Term
-term = do
-  string "Typ"
+pTyp :: Parser u Term
+pTyp = do
+  reserved "Typ"
   return Typ
+
+-- TODO
+term :: Parser u Term
+term = pTyp
