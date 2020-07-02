@@ -35,30 +35,26 @@ tokn p = do
   spaces
   return a
 
-reservedNoSpc :: String -> Parser u String
-reservedNoSpc s = try $ string s
-reserved s = tokn $ reservedNoSpc s
+reserved :: String -> Parser u String
+reserved s = tokn $ try $ string s
 
 keywords = ["rec", "let", "def", "Typ"]
 
-nameNoSpc :: Parser u String
-nameNoSpc = do
+name :: Parser u String
+name = tokn $ do
   nam <- many1 alphaNum
   case find (nam ==) keywords of
     Just nam -> fail $ nam ++ " is a keyword."
     Nothing  -> return nam
-name = tokn $ nameNoSpc
 
-delimNoSpc :: Parser u a -> String -> String -> Parser u a
-delimNoSpc p delim1 delim2 = do
+
+delim :: Parser u a -> String -> String -> Parser u a
+delim p delim1 delim2 = tokn $ do
   reserved delim1
   a <- p
-  reservedNoSpc delim2
+  reserved delim2
   return a
-delim p delim1 delim2 = tokn $ delimNoSpc p delim1 delim2
 
-parensNoSpc p = delimNoSpc p "(" ")"
-parensNoSpc' p = delimNoSpc p "<" ">"
 parens p = delim p "(" ")"
 parens' p = delim p "<" ">"
 
@@ -96,17 +92,16 @@ vars = do
     else
     return [var]
 
-terms :: Parser Ctx [(Term', Bool)]
+terms :: Parser Ctx [Term']
 terms = do
-  eras <- option False $ ((== "-") <$> reserved "-")
   trm <- term
   comma <- option False trycomma
   if comma
     then do
     rest <- terms
-    return $ (trm, eras) : rest
+    return $ trm : rest
     else
-    return [(trm, eras)]
+    return [trm]
 
 def :: Parser Ctx (String, Term', Term')
 def = do
@@ -185,22 +180,25 @@ pAnn = try $ parens $ do
   bnd <- term
   return $ \ctx -> (Ann False (trm ctx) (bnd ctx))
 
-pApp :: Parser Ctx Term'
+pApp :: Parser Ctx (Term' -> Term')
 pApp = do
-  let followedByParen p = do
-        trm <- p
-        reserved "("
-        return trm
-  func <- (try $ followedByParen pVar) <|> (followedByParen $ parens term)
-  args <- terms
-  reserved ")"
-  let traverse func (arg, eras) = \ctx -> App eras (func ctx) (arg ctx)
-  return $ foldl traverse func args
+  x <- try $ which (parens terms) (parens' terms)
+  let (eras, args) = case x of
+        Left  args -> (False, args)
+        Right args -> (True, args)
+  let traverse func arg = \ctx -> App eras (func ctx) (arg ctx)
+  return $ \func -> foldl traverse func args
 
 term :: Parser Ctx Term'
 term =  do
-  trm <- pLam <|> pAll <|> pFix <|> pSec <|> pAnn <|> pTyp <|> pApp <|> pVar 
-  return trm
+  let prim = pLam <|> pAll <|> pFix <|> pSec <|> pAnn <|> pTyp
+  let app = pVar <|> parens term
+  trm <- which prim app
+  case trm of
+    Left trm -> return trm
+    Right func -> do
+      conts <- many pApp
+      return $ foldl (flip ($)) func conts
 
 termEnd = do
   spaces

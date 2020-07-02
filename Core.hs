@@ -31,6 +31,8 @@ instance Show Term where
     -- Lam name bind body                 -> concat ["(", n, " : ", go h vs rs, ") => ", go b (n : vs) rs]
     Lam eras name body      ->
       (if eras then "Λ" else "λ") ++ name ++ ". " ++ show (body (Var name 0))
+    App eras func@(App _ _ _) argm      ->
+      init (show func) ++ (if eras then " -" else " ") ++ show argm ++ ")"
     App eras func argm      ->
       "(" ++ show func ++ (if eras then " -" else " ") ++ show argm ++ ")"
     Fix name body           ->
