@@ -96,16 +96,17 @@ vars = do
     else
     return [var]
 
-terms :: Parser Ctx [Term']
+terms :: Parser Ctx [(Term', Bool)]
 terms = do
+  eras <- option False $ ((== "-") <$> reserved "-")
   trm <- term
   comma <- option False trycomma
   if comma
     then do
     rest <- terms
-    return $ trm : rest
+    return $ (trm, eras) : rest
     else
-    return [trm]
+    return [(trm, eras)]
 
 def :: Parser Ctx (String, Term', Term')
 def = do
@@ -184,19 +185,21 @@ pAnn = try $ parens $ do
   bnd <- term
   return $ \ctx -> (Ann False (trm ctx) (bnd ctx))
 
--- pApp :: Parser Ctx Term'
--- pApp = do
---   func <- pVar <|> parens term
---   x <- which (parens terms) (parens' terms)
---   let (eras, args) = case x of
---         Left  args -> (False, reverse args)
---         Right args -> (True, reverse args)
---   let traverse func arg = \ctx -> App eras (func ctx) (arg ctx)
---   return $ foldl traverse func args
+pApp :: Parser Ctx Term'
+pApp = do
+  let followedByParen p = do
+        trm <- p
+        reserved "("
+        return trm
+  func <- (try $ followedByParen pVar) <|> (followedByParen $ parens term)
+  args <- terms
+  reserved ")"
+  let traverse func (arg, eras) = \ctx -> App eras (func ctx) (arg ctx)
+  return $ foldl traverse func args
 
 term :: Parser Ctx Term'
 term =  do
-  trm <- pLam <|> pAll <|> pFix <|> pSec <|> pAnn <|> pTyp <|> pVar 
+  trm <- pLam <|> pAll <|> pFix <|> pSec <|> pAnn <|> pTyp <|> pApp <|> pVar 
   return trm
 
 termEnd = do
