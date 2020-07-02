@@ -168,30 +168,6 @@ typcheck trm0 typ0 dep seen0 =
 
 check trm typ = typcheck trm typ 0 S.empty
 
--- Examples
-natTyp :: Term
-natTyp =
-  let
-    zero = Lam True "P" $ \_ -> Lam False "z" $ \z -> Lam False "s" $ \s -> z
-    succ typ = Ann False (Lam False "n" $ \n -> Lam True "P" $ \_ -> Lam False "z" $ \z -> Lam False "s" $ \s -> App False s n) (All False "" typ $ \_ -> typ)
-  in
-    Fix "Nat" $ \natTyp ->
-    Sec "self" natTyp $ \self ->
-    All True "P" (All False "" natTyp $ \_ -> Typ) $ \pTyp ->
-    All False "" (App False pTyp zero) $ \_ ->
-    All False "" (All False "pred" natTyp $ \pred -> (App False pTyp $ App False (succ natTyp) pred)) $ \_ ->
-    App False pTyp self
-
-succtype = All False "" natTyp $ \_ -> natTyp
-succterm = Lam False "n" $ \n -> Lam True "P" $ \_ -> Lam False "z" $ \z -> Lam False "s" $ \s -> App False s n
-
-suc = Ann False succterm succtype
-zero = Lam True "P" $ \_ -> Lam False "z" $ \z -> Lam False "s" $ \s -> z
-one = App False suc zero
-two = App False suc one
-
-
-
 -- Debugging
 typcheckTrace :: Term -> Term -> Int -> Set String -> Writer [String] Bool
 typcheckTrace trm0 typ0 dep seen0 = do
