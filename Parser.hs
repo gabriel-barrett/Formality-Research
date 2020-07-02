@@ -29,34 +29,38 @@ parseWith p u s = parse' p' u s
           str <- getInput
           return (a, str)
 
-tok :: Parser u a -> Parser u a
-tok p = do
+tokn :: Parser u a -> Parser u a
+tokn p = do
+  a <- p
   spaces
-  p
+  return a
 
-reserved :: String -> Parser u String
-reserved s = tok $ string s
+reservedNoSpc :: String -> Parser u String
+reservedNoSpc s = try $ string s
+reserved s = tokn $ reservedNoSpc s
 
-name :: Parser u String
-name = tok $ do
+keywords = ["rec", "let", "def", "Typ"]
+
+nameNoSpc :: Parser u String
+nameNoSpc = do
   nam <- many1 alphaNum
-  if nam == "rec"
-    then fail "rec is a keyword."
-    else return nam
+  case find (nam ==) keywords of
+    Just nam -> fail $ nam ++ " is a keyword."
+    Nothing  -> return nam
+name = tokn $ nameNoSpc
 
-parens :: Parser u a -> Parser u a
-parens p = do
-  reserved "("
+delimNoSpc :: Parser u a -> String -> String -> Parser u a
+delimNoSpc p delim1 delim2 = do
+  reserved delim1
   a <- p
-  reserved ")"
+  reservedNoSpc delim2
   return a
+delim p delim1 delim2 = tokn $ delimNoSpc p delim1 delim2
 
-parens' :: Parser u a -> Parser u a
-parens' p = do
-  reserved "<"
-  a <- p
-  reserved ">"
-  return a
+parensNoSpc p = delimNoSpc p "(" ")"
+parensNoSpc' p = delimNoSpc p "<" ">"
+parens p = delim p "(" ")"
+parens' p = delim p "<" ">"
 
 bind :: Parser Ctx (String, Term')
 bind = do
@@ -126,11 +130,11 @@ pVar = do
 
 pLam :: Parser Ctx Term'
 pLam = do
-  ctx <- getState
-  x <- which (parens vars) (parens' vars)
+  x <- try $ which (parens vars) (parens' vars)
   let (eras, ctx') = case x of
         Left  ctx' -> (False, reverse ctx')
         Right ctx' -> (True, reverse ctx')
+  ctx <- getState
   modifyState (ctx' ++)
   bod <- term
   putState ctx
@@ -139,11 +143,12 @@ pLam = do
 
 pAll :: Parser Ctx Term'
 pAll = do
-  ctx <- getState
-  x <- which (parens binds) (parens' binds)
+  x <- try $ which (parens binds) (parens' binds)
+  reserved "->"
   let (eras, ctx', bnds) = case x of
         Left  (ctx', bnds) -> (False, reverse ctx', reverse bnds)
         Right (ctx', bnds) -> (True, reverse ctx', reverse bnds)
+  ctx <- getState
   modifyState (ctx' ++)
   bod <- term
   putState ctx
@@ -152,9 +157,8 @@ pAll = do
 
 pFix :: Parser Ctx Term'
 pFix = do
+  reserved "rec "
   ctx <- getState
-  reserved "rec"
-  space
   nam <- name
   reserved "."
   modifyState (nam :)
@@ -164,40 +168,45 @@ pFix = do
 
 pSec :: Parser Ctx Term'
 pSec = do
-  ctx <- getState
   reserved "${"
   (nam, bnd) <- bind
   reserved "}"
+  ctx <- getState
   modifyState (nam :)
   bod <- term
   putState ctx
   return $ \ctx -> Sec nam (bnd ctx) $ \x -> bod (x : ctx)
 
 pAnn :: Parser Ctx Term'
-pAnn = parens $ do
+pAnn = try $ parens $ do
   trm <- term
   reserved "::"
   bnd <- term
   return $ \ctx -> (Ann False (trm ctx) (bnd ctx))
 
-pApp :: Parser Ctx Term'
-pApp = do
-  func <- pVar <|> parens term
-  notFollowedBy space
-  x <- which (parens terms) (parens' terms)
-  let (eras, args) = case x of
-        Left  args -> (False, reverse args)
-        Right args -> (True, reverse args)
-  let traverse func arg = \ctx -> App eras (func ctx) (arg ctx)
-  return $ foldl traverse func args
+-- pApp :: Parser Ctx Term'
+-- pApp = do
+--   func <- pVar <|> parens term
+--   x <- which (parens terms) (parens' terms)
+--   let (eras, args) = case x of
+--         Left  args -> (False, reverse args)
+--         Right args -> (True, reverse args)
+--   let traverse func arg = \ctx -> App eras (func ctx) (arg ctx)
+--   return $ foldl traverse func args
 
 term :: Parser Ctx Term'
 term =  do
-  trm <- try pFix <|> try pAll <|> try pLam <|> try pSec <|> try pAnn <|> try pApp <|> try pVar <|> try pTyp
+  trm <- pLam <|> pAll <|> pFix <|> pSec <|> pAnn <|> pTyp <|> pVar 
   return trm
 
-parseTrm st = case parseWith term [] st of
-  Right (cont, msg) -> cont []
+termEnd = do
+  spaces
+  trm <- term
+  eof
+  return trm
+
+parseTrm st = case parse' termEnd [] st of
+  Right cont -> cont []
   Left cont -> error $ show cont
 
 -- Examples
