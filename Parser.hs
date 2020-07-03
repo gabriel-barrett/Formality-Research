@@ -4,30 +4,20 @@ import Core
 
 import Control.Monad
 import Data.List
+import qualified Data.Map.Strict as M
 import Text.Parsec
 import Text.Parsec.Char
 import Text.Parsec.Combinator (many1)
 
 type Ctx = [String]
+type Ref = M.Map String Term
+type PState = (Ctx, Ref)
 type Term' = [Term] -> Term
-
-findRef :: Ctx -> String -> Maybe(Int)
-findRef ctx nam = findIndex (== nam) ctx
 
 type Parser u a = Parsec String u a
 
 which :: Parser u a -> Parser u b -> Parser u (Either a b)
 which p q = (Left <$> p) <|> (Right <$> q)
-
-parse' :: Parser u a -> u -> String -> Either ParseError a
-parse' p u s = runParser p u "" s
-
-parseWith :: Parser u a -> u -> String -> Either ParseError (a, String)
-parseWith p u s = parse' p' u s
-  where p' = do
-          a <- p
-          str <- getInput
-          return (a, str)
 
 tokn :: Parser u a -> Parser u a
 tokn p = do
@@ -58,7 +48,7 @@ delim p delim1 delim2 = tokn $ do
 parens p = delim p "(" ")"
 parens' p = delim p "<" ">"
 
-bind :: Parser Ctx (String, Term')
+bind :: Parser PState (String, Term')
 bind = do
   nam <- name
   reserved ":"
@@ -70,7 +60,7 @@ trycomma = do
   c <- reserved ","
   return $ c == ","
 
-binds :: Parser Ctx ([String], [Term'])
+binds :: Parser PState ([String], [Term'])
 binds = do
   (nam, bnd) <- bind
   comma <- option False trycomma
@@ -81,7 +71,7 @@ binds = do
     else
     return ([nam], [bnd])
 
-vars :: Parser Ctx [String]
+vars :: Parser PState [String]
 vars = do
   var <- name
   comma <- option False trycomma
@@ -92,7 +82,7 @@ vars = do
     else
     return [var]
 
-terms :: Parser Ctx [Term']
+terms :: Parser PState [Term']
 terms = do
   trm <- term
   comma <- option False trycomma
@@ -103,84 +93,77 @@ terms = do
     else
     return [trm]
 
-def :: Parser Ctx (String, Term', Term')
-def = do
-  nam <- name
-  reserved ":"
-  typ <- term
-  trm <- term
-  return (nam, typ, trm)
-
-pTyp :: Parser Ctx Term'
+pTyp :: Parser PState Term'
 pTyp = do
   reserved "Typ"
   return $ \_ -> Typ
 
-pVar :: Parser Ctx Term'
+pVar :: Parser PState Term'
 pVar = do
   nam <- name
-  ctx <- getState
-  case findRef ctx nam of
-    Just idx -> return $ \clos -> clos !! idx
-    Nothing -> fail $ "Unbound variable " ++ nam
+  (ctx, refs) <- getState
+  case (findIndex (== nam) ctx, M.lookup nam refs) of
+    (Just idx, _) -> return $ \clos -> clos !! idx
+    (_, Just trm) -> return $ \clos -> trm
+    (_, _) -> fail $ "Unbound variable " ++ nam
 
-pLam :: Parser Ctx Term'
+pLam :: Parser PState Term'
 pLam = do
   x <- try $ which (parens vars) (parens' vars)
   let (eras, ctx') = case x of
         Left  ctx' -> (False, reverse ctx')
         Right ctx' -> (True, reverse ctx')
-  ctx <- getState
-  modifyState (ctx' ++)
+  (ctx, trms) <- getState
+  modifyState $ \(ctx, trms) -> (ctx' ++ ctx, trms)
   bod <- term
-  putState ctx
+  putState (ctx, trms)
   let traverse bod nam = \ctx -> Lam eras nam $ \x -> bod (x : ctx)
   return $ foldl traverse bod ctx'
 
-pAll :: Parser Ctx Term'
+pAll :: Parser PState Term'
 pAll = do
   x <- try $ which (parens binds) (parens' binds)
   reserved "->"
   let (eras, ctx', bnds) = case x of
         Left  (ctx', bnds) -> (False, reverse ctx', reverse bnds)
         Right (ctx', bnds) -> (True, reverse ctx', reverse bnds)
-  ctx <- getState
-  modifyState (ctx' ++)
+  (ctx, trms) <- getState
+  modifyState $ \(ctx, trms) -> (ctx' ++ ctx, trms)
   bod <- term
-  putState ctx
+  putState (ctx, trms)
   let traverse bod (nam, bnd) = \ctx -> All eras nam (bnd ctx) $ \x -> bod (x : ctx)
   return $ foldl traverse bod $ zip ctx' bnds
 
-pFix :: Parser Ctx Term'
+pFix :: Parser PState Term'
 pFix = do
   reserved "rec "
-  ctx <- getState
   nam <- name
   reserved "."
-  modifyState (nam :)
+  (ctx, trms) <- getState
+  modifyState $ \(ctx, trms) -> (nam : ctx, trms)
   bod <- term
-  putState ctx
+  putState (ctx, trms)
   return $ \ctx -> Fix nam $ \x -> bod (x : ctx)
 
-pSec :: Parser Ctx Term'
+pSec :: Parser PState Term'
 pSec = do
   reserved "${"
   (nam, bnd) <- bind
   reserved "}"
-  ctx <- getState
-  modifyState (nam :)
+  (ctx, trms) <- getState
+  modifyState $ \(ctx, trms) -> (nam : ctx, trms)
   bod <- term
-  putState ctx
+  putState (ctx, trms)
   return $ \ctx -> Sec nam (bnd ctx) $ \x -> bod (x : ctx)
 
-pAnn :: Parser Ctx Term'
+pAnn :: Parser PState Term'
 pAnn = try $ parens $ do
   trm <- term
   reserved "::"
   bnd <- term
   return $ \ctx -> (Ann False (trm ctx) (bnd ctx))
 
-pApp :: Parser Ctx (Term' -> Term')
+pApp :: Parser PState (Term' -> Term')
 pApp = do
   x <- try $ which (parens terms) (parens' terms)
   let (eras, args) = case x of
@@ -189,7 +172,7 @@ pApp = do
   let traverse func arg = \ctx -> App eras (func ctx) (arg ctx)
   return $ \func -> foldl traverse func args
 
-term :: Parser Ctx Term'
+term :: Parser PState Term'
 term =  do
   let prim = pLam <|> pAll <|> pFix <|> pSec <|> pAnn <|> pTyp
   let app = pVar <|> parens term
@@ -200,34 +183,21 @@ term =  do
       conts <- many pApp
       return $ foldl (flip ($)) func conts
 
-termEnd = do
-  spaces
+def :: Parser PState (String, Term, Term)
+def = do
+  nam <- name
+  reserved ":"
+  typ <- term
+  modifyState $ \(_, trms) -> ([], trms)
   trm <- term
-  eof
-  return trm
+  let def = Ann False (trm []) (typ [])
+  modifyState $ \(_, trms) -> ([], M.insert nam def trms)
+  return (nam, trm [], typ [])
 
-parseTrm st = case parse' termEnd [] st of
-  Right cont -> cont []
-  Left cont -> error $ show cont
-
--- Examples
-natTyp :: Term
-natTyp =
-  let
-    zero = Lam True "P" $ \_ -> Lam False "z" $ \z -> Lam False "s" $ \s -> z
-    succ typ = Ann False (Lam False "n" $ \n -> Lam True "P" $ \_ -> Lam False "z" $ \z -> Lam False "s" $ \s -> App False s n) (All False "" typ $ \_ -> typ)
-  in
-    Fix "Nat" $ \natTyp ->
-    Sec "self" natTyp $ \self ->
-    All True "P" (All False "" natTyp $ \_ -> Typ) $ \pTyp ->
-    All False "" (App False pTyp zero) $ \_ ->
-    All False "" (All False "pred" natTyp $ \pred -> (App False pTyp $ App False (succ natTyp) pred)) $ \_ ->
-    App False pTyp self
-
-succtype = All False "" natTyp $ \_ -> natTyp
-succterm = Lam False "n" $ \n -> Lam True "P" $ \_ -> Lam False "z" $ \z -> Lam False "s" $ \s -> App False s n
-
-suc = Ann False succterm succtype
-zero = Lam True "P" $ \_ -> Lam False "z" $ \z -> Lam False "s" $ \s -> z
-one = App False suc zero
-two = App False suc one
+runFile :: SourceName -> String -> Either ParseError [(String, Term, Term)]
+runFile srcnam src = runParser p ([], M.empty) srcnam src
+  where p = do
+          spaces
+          refs <- many1 def
+          eof
+          return refs
