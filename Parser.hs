@@ -30,9 +30,9 @@ reserved s = tokn $ try $ string s
 
 keywords = ["rec", "let", "def", "Typ"]
 
-name :: Parser u String
-name = tokn $ do
-  nam <- many1 alphaNum
+name :: Bool -> Parser u String
+name empty = tokn $ do
+  nam <- (if empty then many else many1) alphaNum
   case find (nam ==) keywords of
     Just nam -> fail $ nam ++ " is a keyword."
     Nothing  -> return nam
@@ -50,7 +50,7 @@ parens' p = delim p "<" ">"
 
 bind :: Parser PState (String, Term')
 bind = do
-  nam <- name
+  nam <- name True
   reserved ":"
   bnd <- term
   return (nam, bnd)
@@ -73,7 +73,7 @@ binds = do
 
 vars :: Parser PState [String]
 vars = do
-  var <- name
+  var <- name True
   comma <- option False trycomma
   if comma
     then do
@@ -95,12 +95,12 @@ terms = do
 
 pTyp :: Parser PState Term'
 pTyp = do
-  reserved "Typ"
+  reserved "Type"
   return $ \_ -> Typ
 
 pVar :: Parser PState Term'
 pVar = do
-  nam <- name
+  nam <- name False
   (ctx, refs) <- getState
   case (findIndex (== nam) ctx, M.lookup nam refs) of
     (Just idx, _) -> return $ \clos -> clos !! idx
@@ -137,7 +137,7 @@ pAll = do
 pFix :: Parser PState Term'
 pFix = do
   reserved "rec "
-  nam <- name
+  nam <- name False
   reserved "."
   (ctx, trms) <- getState
   modifyState $ \(ctx, trms) -> (nam : ctx, trms)
@@ -172,9 +172,15 @@ pApp = do
   let traverse func arg = \ctx -> App eras (func ctx) (arg ctx)
   return $ \func -> foldl traverse func args
 
+pCom :: Parser PState ()
+pCom = do
+  reserved "/*"
+  manyTill anyChar (reserved "*/")
+  return ()
+
 term :: Parser PState Term'
 term =  do
-  let prim = pLam <|> pAll <|> pFix <|> pSec <|> pAnn <|> pTyp
+  let prim = pAnn <|> pLam <|> pAll <|> pFix <|> pSec <|> pTyp
   let app = pVar <|> parens term
   trm <- which prim app
   case trm of
@@ -185,19 +191,32 @@ term =  do
 
 def :: Parser PState (String, Term, Term)
 def = do
-  nam <- name
+  nam <- name False
   reserved ":"
   typ <- term
+  reserved "="
   modifyState $ \(_, trms) -> ([], trms)
   trm <- term
   let def = Ann False (trm []) (typ [])
   modifyState $ \(_, trms) -> ([], M.insert nam def trms)
   return (nam, trm [], typ [])
 
+defs :: Parser PState [(String, Term, Term)]
+defs = do
+  pCom <|> return ()
+  ref <- def
+  refs <- option [] $ try defs
+  return $ ref : refs
+
 runFile :: SourceName -> String -> Either ParseError [(String, Term, Term)]
 runFile srcnam src = runParser p ([], M.empty) srcnam src
   where p = do
           spaces
-          refs <- many1 def
+          refs <- defs
+          pCom <|> return ()
           eof
           return refs
+
+parseTrm src = case runParser term ([], M.empty) "" src of
+  Left err -> error $ show err
+  Right trm -> trm []

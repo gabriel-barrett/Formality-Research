@@ -113,16 +113,16 @@ equal a b dep seen =
 
 -- As of now, only extracts checked type annotations and simplifies intersections
 typinfer trm dep seen =
-      case trm of
-        Ann True trm typ@(Sec _ bind body) ->
-          bind : (body trm) : typinfer trm dep seen
-        Ann True trm typ ->
-          typ : typinfer trm dep seen
-        Ann False trm typ ->
-          if typcheck trm typ dep seen
-          then typinfer (Ann True trm typ) dep seen
-          else typinfer trm dep seen
-        _ -> []
+  case trm of
+    Ann True trm typ@(Sec _ bind body) ->
+      bind : (body trm) : typinfer trm dep seen
+    Ann True trm typ ->
+      typ : typinfer trm dep seen
+    Ann False trm typ ->
+      if typcheck trm typ dep seen
+      then typinfer (Ann True trm typ) dep seen
+      else typinfer trm dep seen
+    _ -> []
 
 typcheck trm0 typ0 dep seen0 =
   let
@@ -153,6 +153,8 @@ typcheck trm0 typ0 dep seen0 =
         equal typ' typ dep S.empty || typcheck trm' typ dep seen
       (Ann False trm' typ', typ) ->
         if typcheck trm' typ' dep seen then typcheck (Ann True trm' typ') typ dep seen else False
+      (trm, Ann _ expr _) ->
+        typcheck trm expr dep seen
       -- Type constructors
       (Typ, Typ) ->
         True
@@ -197,50 +199,52 @@ typcheckTrace trm0 typ0 dep seen0 = do
               check <- fcheck ftyp
               return $ res || check
         res <- foldr traverse (return False) ftyps
-        tell $ ["With result: " ++ show res] ++ output
-        tell $ map (\typ -> " - " ++ show typ) ftyps ++ ["FTYPS: "]
+        tell $ ["App result: " ++ show res] ++ output
+        tell $ map (\typ -> " - " ++ show typ) ftyps ++ [show ftyps ++ " FTYPS: "]
         return res
       (Ann True trm' typ', typ) -> do
         let eq = equal typ' typ dep S.empty
         check <- typcheckTrace trm' typ dep seen
         let res = eq || check
-        tell $ ["With result: " ++ show res] ++ output
+        tell $ ["Ann True result: " ++ show res] ++ output
         return $ res
       (Ann False trm' typ', typ) -> do
         check2 <- typcheckTrace (Ann True trm' typ') typ dep seen
         check1 <- typcheckTrace trm' typ' dep seen
         let res = if check1 then check2 else False
-        tell $ ["With result: " ++ show res] ++ output
+        tell $ ["Ann False result: " ++ show res] ++ output
         return $ res
+      (trm, Ann _ expr _) ->
+        typcheckTrace trm expr dep seen
       (Typ, Typ) -> do
-        tell $ ["With result: " ++ show True] ++ output
+        tell $ ["Typ result: " ++ show True] ++ output
         return True
       (Sec name bind body, Typ) -> do
         check2 <- typcheckTrace (body (Ann True (Var name dep) bind)) typ (dep+1) seen
         check1 <- typcheckTrace bind Typ dep seen
         let res = check1 && check2
-        tell $ ["With result: " ++ show res] ++ output
+        tell $ ["Sec result: " ++ show res] ++ output
         return $ res
       (All _ name bind body, Typ) -> do
         check2 <- typcheckTrace (body (Ann True (Var name dep) bind)) typ (dep+1) seen
         check1 <- typcheckTrace bind Typ dep seen
         let res = check1 && check2
-        tell $ ["With result: " ++ show res] ++ output
+        tell $ ["All result: " ++ show res] ++ output
         return $ res
       (trm, Sec _ bind body) -> do
         let bindh = hash bind
         check2 <- typcheckTrace trm (body trm) dep (S.insert (trmh ++ bindh) seen)
         check1 <- typcheckTrace trm bind dep seen
         let res = check1 && check2
-        tell $ ["With result: " ++ show res] ++ output
+        tell $ ["Sec intr. result: " ++ show res] ++ output
         return $ res
       (Lam eras name body, All eras' name' bind body') -> do
         check <- typcheckTrace (body (Ann True (Var name dep) bind)) (body' (Var name' dep)) (dep+1) seen
         let res = (eras == eras') && check
-        tell $ ["With result: " ++ show res] ++ output
+        tell $ ["Lam result: " ++ show res] ++ output
         return $ res
       (_, _) -> do
-        tell $ ["With result: " ++ show False] ++ output
+        tell $ ["Rest: " ++ show False] ++ output
         return False
 
 checkTrace trm typ = do
